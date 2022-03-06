@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+</head>
+
+<body>
+    <script>
+    function def(obj, key, value, enumerable) {
+        Object.defineProperty(obj, key, {
+            enumerable: !!enumerable,
+            configurable: true,
+            writable: true,
+            value
+        })
+    }
+    const arrayProto = Array.prototype;
+    const arrayMethods = Object.create(arrayProto)
+    const methodsToPatch = [
+        'push',
+        'pop',
+        'shift',
+        'unshift',
+        'splice',
+        'sort',
+        'reverse'
+    ];
+    methodsToPatch.forEach(method => {
+        def(arrayMethods, method, function(...args) {
+            const result = arrayProto[method].apply(this, args);
+            // 有三种方法push\unshift\splice能够插入新项，现在要把插入的新项也要变为observe的
+            let inserted;
+
+            switch (methodName) {
+                case 'push':
+                case 'unshift':
+                    inserted = args;
+                    break;
+                case 'splice':
+                    // splice格式是splice(下标, 数量, 插入的新项)
+                    inserted = args.slice(2);
+                    break;
+            }
+
+            // 判断有没有要插入的新项，让新项也变为响应的
+            if (inserted) {
+                observeArray(inserted);
+            }
+            return result;
+        })
+    })
+
+    function defineReactive(obj, key) {
+        let val = obj[key];
+        const dep = new Dep();
+        let childOb = observe(val);
+        // console.log('childOb', childOb)
+        Object.defineProperty(obj, key, {
+            enumerable: true,
+            configurable: true,
+            get() {
+                // console.log(`${obj}中的${key}被调用,值为${val}`);
+                if (Dep.target) {
+                    dep.depend();
+                    console.log('dep', dep)
+                    if (childOb) {
+                        childOb.dep.depend();
+                    }
+                }
+                return val;
+            },
+            set(newVal) {
+                console.log(`${obj}中的${key}被修改为${newVal}`);
+                if (newVal === val || (newVal !== newVal && val !== val)) {
+                    return
+                }
+                val = newVal;
+                observe(newVal);
+                // 派发更新
+                dep.notify();
+            }
+        })
+    };
+
+
+
+    // 观察者
+    /*
+		此处代码未采用 Observer 类去管理观察者
+        // function walk(obj) {
+        //     const keys = Object.keys(obj);
+        //     for (let i = 0; i < keys.length; i++) {
+        //         defineReactive(obj, keys[i]);
+        //     }
+        // };
+
+        // function observeArray(arr) {
+        //     for (let i = 0; i < arr.length; i++) {
+        //         observe(arr[i])
+        //     }
+        // };
+
+        // function observe(data) {
+        //     if (typeof data !== 'object') return;
+        //     if (Array.isArray(data)) {
+        //         //重新定义7种数组原型方法
+        //         data.__proto__ = arrayMethods;
+        //         //对 arr 里的数据进行响应化
+        //         observeArray(data)
+        //     } else {
+        //         walk(data);
+        //     }
+        // };
+
+    */
+    function hasOwn(obj, props) {
+        return Object.hasOwnProperty(obj, props);
+    }
+
+    function isObject(obj) {
+        return obj !== null && typeof obj === 'object'
+    }
+
+    function observe(data) {
+        if (!isObject(data)) return;
+        let ob;
+        if (hasOwn(data, '__ob__') && data.__ob__ instanceof Observer) {
+            ob = data.__ob__
+        } else {
+            ob = new Observer(data);
+        }
+        return ob;
+    }
+    class Observer {
+        constructor(value) {
+            this.value = value;
+            this.dep = new Dep();
+            def(value, '__ob__', this)
+            if (Array.isArray(value)) {
+                value.__proto__ = arrayProto;
+                this.observeArray(value);
+            } else {
+                this.walk(value);
+            }
+        }
+        observeArray(arr) {
+            for (let i = 0; i < arr.length; i++) {
+                observe(arr[i])
+            }
+        };
+        walk(obj) {
+            const keys = Object.keys(obj);
+            for (let i = 0; i < keys.length; i++) {
+                defineReactive(obj, keys[i]);
+            }
+        };
+
+    }
+
+    let uid_Dep = 0;
+    class Dep {
+        constructor() {
+            this.id = uid_Dep++
+            this.subs = [];
+        }
+        depend() {
+            // console.log(Dep.target)
+            if (Dep.target) {
+                this.subs.push(Dep.target);
+            }
+        }
+        notify() {
+            const subs = this.subs;
+            for (var i = 0; i < subs.length; i++) {
+                subs[i].update();
+            }
+        }
+    }
+    Dep.target = null;
+
+    let uid_watcher = 0;
+    class Watcher {
+        constructor(vm, expOrFn, cb) {
+            this.id = uid_watcher++;
+            this.vm = vm;
+            this.getter = parsePath(expOrFn);
+            this.cb = cb;
+            // 用来触发依赖收集
+            this.value = this.get();
+        }
+        get() {
+            // 标记 Dep.target,能够进行依赖收集
+            Dep.target = this;
+            // 触发 getter 方法，进行依赖收集
+            let value;
+            const obj = this.vm;
+             value = this.getter(obj);
+            // 清除 Dep.target,防止进行依赖收集
+            Dep.target = null;
+            return value
+        }
+        update() {
+            this.run();
+        }
+        run() {
+            const value = this.getter(this.vm);
+            if (value !== this.value || typeof value == 'object') {
+                const oldValue = this.value;
+                this.value = value;
+                this.cb.call(this.vm, value, oldValue);
+            }
+        }
+    }
+
+    function parsePath(str) {
+        var segments = str.split('.');
+
+        return (obj) => {
+            for (let i = 0; i < segments.length; i++) {
+                if (!obj) return;
+                obj = obj[segments[i]]
+            }
+            return obj;
+        };
+    }
+
+
+
+    // 开启数据监听
+    function proxy(target, sourceKey, key) {
+        Object.defineProperty(target, key, {
+            enumerable: true,
+            configurable: true,
+            get() {
+                return this[sourceKey][key];
+            },
+            set(newVal) {
+                this[sourceKey][key] = newVal;
+            }
+        });
+    }
+
+    function initData(vm) {
+        let data = vm.$options.data;
+        data = vm._data = data;
+        const keys = Object.keys(data);
+        let i = keys.length;
+        while (i--) {
+            let key = keys[i];
+            proxy(vm, "_data", key);
+        }
+
+        observe(data);
+    }
+
+    function initState(vm) {
+        initData(vm);
+    }
+
+    function initMixin(Vue) {
+        Vue.prototype._init = function(options) {
+            const vm = this;
+            vm.$options = options;
+            initState(vm)
+        }
+    }
+
+    function stateMixin(Vue) {
+        Vue.prototype.$watch = function(expOrFn, cb) {
+            const vm = this;
+            const watcher = new Watcher(vm, expOrFn, cb);
+        }
+    }
+
+    function MVue(options) {
+        this._init(options)
+    };
+    initMixin(MVue);
+    stateMixin(MVue);
+
+
+
+    // example
+    const data = {
+        name: 'zhangsan',
+        obj: {
+            a: 1,
+            b: {
+                c: 2
+            }
+        },
+        arr: [1, 2, 3]
+    };
+
+    const mvm = new MVue({
+        data
+    });
+
+    // mvm.$watch('name')
+    // mvm.$watch('name')
+    // mvm.$watch('obj.b.c')
+
+    // 派发更新
+    mvm.$watch('name', (newVal, val) => {
+        console.log('newVal, val', newVal, val)
+    })
+    mvm.name = 'changeName'
+    </script>
+</body>
+
+</html>
